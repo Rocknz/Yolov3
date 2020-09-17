@@ -10,17 +10,19 @@ class Yolo(nn.Module):
     def __init__(self, s_index, e_index, S, C, img_size, lambda_coord, lambda_noobj):
         super(Yolo, self).__init__()
         self.S = S
-        self.anchor = [
-            [10, 13],
-            [16, 30],
-            [33, 23],
-            [30, 61],
-            [62, 45],
-            [59, 119],
-            [116, 90],
-            [156, 198],
-            [373, 326],
-        ]
+        self.anchor = torch.Tensor(
+            [
+                [10, 13],
+                [16, 30],
+                [33, 23],
+                [30, 61],
+                [62, 45],
+                [59, 119],
+                [116, 90],
+                [156, 198],
+                [373, 326],
+            ]
+        ).cuda()
         self.s_index = s_index
         self.e_index = e_index
         self.C = C
@@ -34,26 +36,27 @@ class Yolo(nn.Module):
 
     def IOU(self, b1, b2):
         # [x1 y1 x2 y2]
-        A = (b1[2] - b1[0] + 1) * (b1[3] - b1[1] + 1)
-        B = (b2[2] - b2[0] + 1) * (b2[3] - b2[1] + 1)
-        CM = (min(b1[2], b2[2]) - max(b1[0], b2[0]) + 1) * (
-            min(b1[3], b2[3]) - max(b1[1], b2[1]) + 1
+        A = (b1[:, 2] - b1[:, 0] + 1) * (b1[:, 3] - b1[:, 1] + 1)
+        B = (b2[:, 2] - b2[:, 0] + 1) * (b2[:, 3] - b2[:, 1] + 1)
+        CM = (torch.min(b1[:, 2], b2[:, 2]) - torch.max(b1[:, 0], b2[:, 0]) + 1) * (
+            torch.min(b1[:, 3], b2[:, 3]) - torch.max(b1[:, 1], b2[:, 1] + 1)
         )
         res = (CM) / (A + B - CM)
         del A, B, CM
         return res
 
     def IOU_index(self, w, h):
-        max = 0
-        index = 0
-        for ind, anch in enumerate(self.anchor):
-            iou = self.IOU([0, 0, anch[0], anch[1]], [0, 0, w, h])
-            if max < iou:
-                max = iou
-                index = ind
+        anbox = torch.zeros([self.anchor.shape[0], 4]).cuda()
+        anbox[:, 2] = self.anchor[:, 0]
+        anbox[:, 3] = self.anchor[:, 1]
+        whbox = torch.zeros([self.anchor.shape[0], 4]).cuda()
+        whbox[:, 2] = w
+        whbox[:, 3] = h
 
-            del iou
+        iou = self.IOU(anbox, whbox)
+        index = torch.argmax(iou)
 
+        del iou, anbox, whbox
         return index
 
     def forward(self, batch_x, batch_box):
@@ -91,21 +94,27 @@ class Yolo(nn.Module):
 
                     rect = [res_alpha_x.item(), res_alpha_y.item(), res_w.item(), res_h.item()]
                     # rect = [res_alpha_x, res_alpha_y, res_w, res_h]
-                    iou = self.IOU(
+                    b1 = torch.Tensor(
                         [
-                            rect[0] * div - rect[2] / 2,
-                            rect[1] * div - rect[3] / 2,
-                            rect[0] * div + rect[2] / 2,
-                            rect[1] * div + rect[3] / 2,
-                        ],
+                            [
+                                rect[0] * div - rect[2] / 2,
+                                rect[1] * div - rect[3] / 2,
+                                rect[0] * div + rect[2] / 2,
+                                rect[1] * div + rect[3] / 2,
+                            ]
+                        ]
+                    ).cuda()
+                    b2 = torch.Tensor(
                         [
-                            alpha_x * div - abox[3].item() / 2,
-                            alpha_y * div - abox[4].item() / 2,
-                            alpha_x * div + abox[3].item() / 2,
-                            alpha_y * div + abox[4].item() / 2,
-                        ],
-                    )
-                    iou = torch.Tensor([iou]).cuda()
+                            [
+                                alpha_x * div - abox[3].item() / 2,
+                                alpha_y * div - abox[4].item() / 2,
+                                alpha_x * div + abox[3].item() / 2,
+                                alpha_y * div + abox[4].item() / 2,
+                            ]
+                        ]
+                    ).cuda()
+                    iou = self.IOU(b1, b2)
                     hot_enco = torch.zeros([self.C]).cuda()
                     hot_enco[int(abox[0].item())] = 1
                     label = torch.sigmoid(
@@ -122,7 +131,7 @@ class Yolo(nn.Module):
                     loss = loss + self.mse(res_w, val[2])
                     loss = loss + self.mse(res_h, val[3])
 
-                    del val, hot_enco, label, iou
+                    del val, hot_enco, label, iou, b1, b2
 
             val = torch.zeros(x[check].shape).cuda()
             loss = loss + self.lambda_noobj * self.mse(x[check], val)
