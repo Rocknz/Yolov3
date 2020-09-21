@@ -85,10 +85,10 @@ def train(lr_init):
         print("epoch : {} end".format(epoch))
         loss_val = validation()
         global min_loss
-        if loss_val < min_loss:
-            min_loss = loss_val
-            model.save()
-            print("data save!")
+        # if loss_val < min_loss:
+        #  min_loss = loss_val
+        model.save()
+        #     print("data save!")
         # validation
 
         del loss_val
@@ -126,4 +126,4 @@ def adjust_learning_rate(optimizer, epoch):
 # torch.backends.cudnn.enabled = False
 torch.backends.cudnn.enabled = True
 torch.cuda.set_device(0)
-train(0.00002)
+train(0.000005)

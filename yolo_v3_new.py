@@ -4,6 +4,7 @@ import torch.nn.functional as F
 import time
 import numpy as np
 from torch.autograd import Variable
+import os
 
 
 class Yolo(nn.Module):
@@ -39,7 +40,18 @@ class Yolo(nn.Module):
         A = (b1[:, 2] - b1[:, 0] + 1) * (b1[:, 3] - b1[:, 1] + 1)
         B = (b2[:, 2] - b2[:, 0] + 1) * (b2[:, 3] - b2[:, 1] + 1)
         CM = (torch.min(b1[:, 2], b2[:, 2]) - torch.max(b1[:, 0], b2[:, 0]) + 1) * (
-            torch.min(b1[:, 3], b2[:, 3]) - torch.max(b1[:, 1], b2[:, 1] + 1)
+            torch.min(b1[:, 3], b2[:, 3]) - torch.max(b1[:, 1], b2[:, 1]) + 1
+        )
+        res = (CM) / (A + B - CM)
+        del A, B, CM
+        return res
+
+    def IOU_batch(self, b1, b2):
+        # [x1 y1 x2 y2]
+        A = (b1[:, :, 2] - b1[:, :, 0] + 1) * (b1[:, :, 3] - b1[:, :, 1] + 1)
+        B = (b2[:, :, 2] - b2[:, :, 0] + 1) * (b2[:, :, 3] - b2[:, :, 1] + 1)
+        CM = (torch.min(b1[:, :, 2], b2[:, :, 2]) - torch.max(b1[:, :, 0], b2[:, :, 0]) + 1) * (
+            torch.min(b1[:, :, 3], b2[:, :, 3]) - torch.max(b1[:, :, 1], b2[:, :, 1]) + 1
         )
         res = (CM) / (A + B - CM)
         del A, B, CM
@@ -49,94 +61,114 @@ class Yolo(nn.Module):
         anbox = torch.zeros([self.anchor.shape[0], 4]).cuda()
         anbox[:, 2] = self.anchor[:, 0]
         anbox[:, 3] = self.anchor[:, 1]
-        whbox = torch.zeros([self.anchor.shape[0], 4]).cuda()
-        whbox[:, 2] = w
-        whbox[:, 3] = h
+        whbox = torch.zeros([w.shape[0], 4]).cuda()
+        whbox[:, 2] = w[:]
+        whbox[:, 3] = h[:]
 
-        iou = self.IOU(anbox, whbox)
-        index = torch.argmax(iou)
+        anbox = anbox.unsqueeze(0).repeat([w.shape[0], 1, 1])
+        whbox = whbox.unsqueeze(1).repeat([1, self.anchor.shape[0], 1])
+
+        iou = self.IOU_batch(anbox, whbox)
+        index = torch.argmax(iou, 1)
 
         del iou, anbox, whbox
         return index
 
-    def forward(self, batch_x, batch_box):
+    def forward(self, batch_x, batch_box, batch_index):
         loss = torch.Tensor([0]).cuda()
-        for x, box in zip(batch_x, batch_box):
+        for x, box, n_index in zip(batch_x, batch_box, batch_index):
             box = torch.Tensor(box).cuda()
+            val = torch.logical_and((self.s_index <= n_index[:]), (n_index[:] <= self.e_index))
+            box = box[val]
+            n_index = n_index[val]
+
+            box_size = box.shape[0]
 
             check = torch.zeros(x.shape, dtype=torch.bool).cuda()
-            check[0][:][:] = True
-            check[(5 + self.C)][:][:] = True
-            check[2 * (5 + self.C)][:][:] = True
+            check[0, :, :] = True
+            check[(5 + self.C), :, :] = True
+            check[2 * (5 + self.C), :, :] = True
 
-            for abox in box:
-                index = self.IOU_index(abox[3].item(), abox[4].item())
-                if index >= self.s_index and index <= self.e_index:
-                    now_index = index - self.s_index
+            # for abox, index in zip(box, n_index):
+            # index = self.IOU_index(abox[3].item(), abox[4].item())
+            # if index >= self.s_index and index <= self.e_index:
+            now_index = n_index[:] - self.s_index
 
-                    div = self.img_size / self.S
+            div = self.img_size / self.S
 
-                    index_x = int((abox[1] / div).item())
-                    index_y = int((abox[2] / div).item())
-                    alpha_x = ((abox[1] - index_x * div) / div).item()
-                    alpha_y = ((abox[2] - index_y * div) / div).item()
-                    check[now_index * (5 + self.C)][index_x][index_y] = False
+            index_x = (box[:, 1] / div).long()
+            index_y = (box[:, 2] / div).long()
+            alpha_x = (box[:, 1] - index_x[:] * div) / div
+            alpha_y = (box[:, 2] - index_y[:] * div) / div
+            check[now_index[:] * (5 + self.C), index_x[:], index_y[:]] = False
 
-                    now_x = x.select(2, index_y)
-                    now_x = now_x.select(1, index_x)
+            # start this
 
-                    res_alpha_x = torch.sigmoid(now_x[now_index * (5 + self.C) + 1])
-                    res_alpha_y = torch.sigmoid(now_x[now_index * (5 + self.C) + 2])
-                    # res_alpha_x = now_x[now_index * (5 + self.C) + 1]
-                    # res_alpha_y = now_x[now_index * (5 + self.C) + 2]
-                    res_w = self.anchor[index][0] * torch.exp(now_x[now_index * (5 + self.C) + 3])
-                    res_h = self.anchor[index][1] * torch.exp(now_x[now_index * (5 + self.C) + 4])
+            now_x = x[0 : 3 * (5 + self.C), index_x, index_y]
+            box_iter = torch.Tensor(range(box_size)).long()
 
-                    rect = [res_alpha_x.item(), res_alpha_y.item(), res_w.item(), res_h.item()]
-                    # rect = [res_alpha_x, res_alpha_y, res_w, res_h]
-                    b1 = torch.Tensor(
-                        [
-                            [
-                                rect[0] * div - rect[2] / 2,
-                                rect[1] * div - rect[3] / 2,
-                                rect[0] * div + rect[2] / 2,
-                                rect[1] * div + rect[3] / 2,
-                            ]
-                        ]
-                    ).cuda()
-                    b2 = torch.Tensor(
-                        [
-                            [
-                                alpha_x * div - abox[3].item() / 2,
-                                alpha_y * div - abox[4].item() / 2,
-                                alpha_x * div + abox[3].item() / 2,
-                                alpha_y * div + abox[4].item() / 2,
-                            ]
-                        ]
-                    ).cuda()
-                    iou = self.IOU(b1, b2)
-                    hot_enco = torch.zeros([self.C]).cuda()
-                    hot_enco[int(abox[0].item())] = 1
-                    label = torch.sigmoid(
-                        now_x[now_index * (5 + self.C) + 5 : (now_index + 1) * (5 + self.C)]
-                    )
+            res_alpha_x = torch.sigmoid(now_x[now_index[:] * (5 + self.C) + 1, box_iter])
+            res_alpha_y = torch.sigmoid(now_x[now_index[:] * (5 + self.C) + 2, box_iter])
+            # res_alpha_x = now_x[now_index * (5 + self.C) + 1]
+            # res_alpha_y = now_x[now_index * (5 + self.C) + 2]
+            res_w = self.anchor[n_index, 0] * torch.exp(
+                now_x[now_index * (5 + self.C) + 3, box_iter]
+            )
+            res_h = self.anchor[n_index, 1] * torch.exp(
+                now_x[now_index * (5 + self.C) + 4, box_iter]
+            )
 
-                    val = torch.Tensor([alpha_x, alpha_y, abox[3], abox[4]]).cuda()
-                    loss = loss + self.lambda_coord * self.mse(
-                        now_x[now_index * (5 + self.C)], iou[0]
-                    )
-                    loss = loss + self.bce(label, hot_enco)
-                    loss = loss + self.mse(res_alpha_x, val[0])
-                    loss = loss + self.mse(res_alpha_y, val[1])
-                    loss = loss + self.mse(res_w, val[2])
-                    loss = loss + self.mse(res_h, val[3])
+            rect = torch.zeros([box_size, 4]).cuda()
+            rect[:, 0] = res_alpha_x
+            rect[:, 1] = res_alpha_y
+            rect[:, 2] = res_w
+            rect[:, 3] = res_h
 
-                    del val, hot_enco, label, iou, b1, b2
+            b1 = torch.zeros([box_size, 4]).cuda()
+            b1[:, 0] = rect[:, 0] * div - rect[:, 2] / 2
+            b1[:, 1] = rect[:, 1] * div - rect[:, 3] / 2
+            b1[:, 2] = rect[:, 0] * div + rect[:, 2] / 2
+            b1[:, 3] = rect[:, 1] * div + rect[:, 3] / 2
+
+            b2 = torch.zeros([box_size, 4]).cuda()
+            b2[:, 0] = alpha_x * div - box[:, 3] / 2
+            b2[:, 1] = alpha_y * div - box[:, 4] / 2
+            b2[:, 2] = alpha_x * div + box[:, 3] / 2
+            b2[:, 3] = alpha_y * div + box[:, 4] / 2
+
+            iou = self.IOU(b1, b2)
+            hot_enco = torch.zeros([box_size, self.C]).cuda()
+
+            hot_enco[:, box[:, 0].long()] = 1
+            label_range = torch.Tensor(range(self.C)).cuda().long().repeat([box_size]) + 5
+            now_index_val = now_index.unsqueeze(1).repeat([1, self.C]).reshape(
+                [self.C * box_size]
+            ) * (5 + self.C)
+            label_range = label_range + now_index_val
+            label_range = label_range.long()
+
+            box_size_range = (
+                torch.Tensor(range(box_size))
+                .cuda()
+                .long()
+                .unsqueeze(1)
+                .repeat([1, self.C])
+                .reshape([self.C * box_size])
+            )
+            label = torch.sigmoid(now_x[label_range, box_size_range].reshape([box_size, self.C]))
+
+            val = torch.Tensor([alpha_x, alpha_y, box[:, 3], box[:, 4]]).cuda()
+            loss = loss + self.lambda_coord * self.mse(now_x[now_index * (5 + self.C), :], iou[:])
+            loss = loss + self.bce(label, hot_enco)
+            loss = loss + self.mse(res_alpha_x, val[:, 0])
+            loss = loss + self.mse(res_alpha_y, val[:, 1])
+            loss = loss + self.mse(res_w, val[:, 2])
+            loss = loss + self.mse(res_h, val[:, 3])
 
             val = torch.zeros(x[check].shape).cuda()
             loss = loss + self.lambda_noobj * self.mse(x[check], val)
 
-            del val, check, box
+            del val, check, box, hot_enco, label, iou, b1, b2
 
         return loss
 
@@ -346,6 +378,12 @@ class YoloV3(nn.Module):
         self.yolo3 = Yolo(0, 2, 84, self.C, self.img_size, lambda_coord, lambda_noobj)
 
     def forward(self, x, boxes):
+        index = []
+        for box in boxes:
+            box = torch.Tensor(box).cuda()
+            indexs = self.yolo1.IOU_index(box[:, 3], box[:, 4])
+            index.append(indexs)
+
         # 336
         x = self.conv1(x)
         x = self.res1(x)
@@ -365,7 +403,7 @@ class YoloV3(nn.Module):
 
         y1_1 = self.y1c1(x1)
         y1 = self.y1c2(y1_1)
-        loss1 = self.yolo1(y1, boxes)
+        loss1 = self.yolo1(y1, boxes, index)
 
         # 42
         y2_1 = self.y2c1(y1_1)
@@ -373,7 +411,7 @@ class YoloV3(nn.Module):
         y2_1 = torch.cat((y2_1, x2), 1)
         y2_2 = self.y2c2(y2_1)
         y2 = self.y2c3(y2_2)
-        loss2 = self.yolo2(y2, boxes)
+        loss2 = self.yolo2(y2, boxes, index)
 
         # 84
         y3_1 = self.y3c1(y2_2)
@@ -381,7 +419,7 @@ class YoloV3(nn.Module):
         y3_1 = torch.cat((y3_1, x3), 1)
         y3 = self.y3c2(y3_1)
         y3 = self.y3c3(y3)
-        loss3 = self.yolo3(y3, boxes)
+        loss3 = self.yolo3(y3, boxes, index)
 
         loss = loss1 + loss2 + loss3
 
@@ -417,6 +455,10 @@ def test():
 
 if __name__ == "__main__":
 
+    CUDA_LAUNCH_BLOCKING = 1
+    os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
+    torch.backends.cudnn.enabled = True
+
     S = 7
     B = 2
     C = 92
@@ -437,6 +479,7 @@ if __name__ == "__main__":
     # optimizer = torch.optim.Adam(yolo.parameters(), lr=lr)
     optimizer = torch.optim.Adam(yolo.parameters())
 
+    start = time.time()
     image = torch.from_numpy(image).float().cuda()
     for i in range(300):
         optimizer.zero_grad()
@@ -445,6 +488,7 @@ if __name__ == "__main__":
 
         loss.backward()
         optimizer.step()
-
+    end = time.time()
+    print(end - start)
     loss = yolo(image, boxes)
     print(loss.item())

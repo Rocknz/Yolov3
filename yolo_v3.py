@@ -428,6 +428,7 @@ if __name__ == "__main__":
     # optimizer = torch.optim.Adam(yolo.parameters(), lr=lr)
     optimizer = torch.optim.Adam(yolo.parameters())
 
+    start = time.time()
     image = torch.from_numpy(image).float().cuda()
     for i in range(300):
         optimizer.zero_grad()
@@ -436,6 +437,8 @@ if __name__ == "__main__":
 
         loss.backward()
         optimizer.step()
+    end = time.time()
+    print(end - start)
 
     loss = yolo(image, boxes)
     print(loss.item())
