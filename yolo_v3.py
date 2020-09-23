@@ -28,7 +28,8 @@ class Yolo(nn.Module):
         self.yolo_step = 3
         self.N = self.yolo_step * (5 + C)
         self.mse = nn.MSELoss()
-        self.bce = nn.BCELoss()
+        # self.bce = nn.BCELoss()
+        self.bce = nn.MSELoss()
         self.lambda_coord = lambda_coord
         self.lambda_noobj = lambda_noobj
 
@@ -119,8 +120,8 @@ class Yolo(nn.Module):
                     loss = loss + self.bce(label, hot_enco)
                     loss = loss + self.mse(res_alpha_x, val[0])
                     loss = loss + self.mse(res_alpha_y, val[1])
-                    loss = loss + self.mse(res_w, val[2])
-                    loss = loss + self.mse(res_h, val[3])
+                    loss = loss + self.mse(res_w / self.img_size, val[2] / self.img_size)
+                    loss = loss + self.mse(res_h / self.img_size, val[3] / self.img_size)
 
                     del val, hot_enco, label, iou
 
@@ -161,7 +162,7 @@ class Residual(nn.Module):
 class YoloV3(nn.Module):
     def __init__(self, S, B, C, img_size=672, lambda_coord=5, lambda_noobj=0.5):
         super(YoloV3, self).__init__()
-        self.path = "yolo_model"
+        self.path = "yolo_modelaa"
         self.B = B
         self.C = C
         self.S = S
