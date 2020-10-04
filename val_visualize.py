@@ -20,6 +20,7 @@ model = YoloV3(S, B, Category_num, lambda_coord=5, lambda_noobj=0.5)
 
 
 def print_box(image, box, img_size, start_index):
+    box = torch.sigmoid(box)
     anchor = torch.Tensor(
         [
             [10, 13],
@@ -40,15 +41,11 @@ def print_box(image, box, img_size, start_index):
             nbox = box[0, :, i, j]
             for indx in range(3):
                 start = indx * (5 + Category_num)
-                if nbox[start] >= 0.6:
+                if nbox[start] >= 0.9:
                     alpha_x = nbox[start + 1] * box_len
                     alpha_y = nbox[start + 2] * box_len
-                    w = anchor[start_index + indx, 0] * torch.exp(
-                        4 * torch.sigmoid(nbox[start + 3]) - 2
-                    )
-                    h = anchor[start_index + indx, 1] * torch.exp(
-                        4 * torch.sigmoid(nbox[start + 4]) - 2
-                    )
+                    w = anchor[start_index + indx, 0] * torch.exp(4 * nbox[start + 3] - 2)
+                    h = anchor[start_index + indx, 1] * torch.exp(4 * nbox[start + 4] - 2)
                     x = alpha_x + i * box_len
                     y = alpha_y + j * box_len
 
@@ -61,6 +58,8 @@ def print_box(image, box, img_size, start_index):
 def visualize():
     img, data = data_v.load_val()
     img_tensor = torch.from_numpy(img).float().cuda()
+    data = torch.from_numpy(data).float().cuda()
+
     loss, y1, y2, y3 = model(img_tensor, data)
 
     # draw image

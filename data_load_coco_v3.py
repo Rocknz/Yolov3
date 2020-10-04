@@ -254,17 +254,31 @@ class DataLoad:
         print("Threads destroyed.")
 
     def encode(self, boundingboxes):
-        batch_yolo = []
-        for boxes in boundingboxes:
-            nbox = []
-            for bb in boxes:
+        boxes = np.asarray([])
+        n_index = 0
+
+        for raw_boxes in boundingboxes:
+            box = []
+            for bb in raw_boxes:
                 bb[1] = bb[1] + bb[3] / 2
                 bb[2] = bb[2] + bb[4] / 2
-                nbox.append(bb)
+                box.append(bb)
+            box = np.asarray(box)
 
-            batch_yolo.append(np.asarray(nbox))
+            if box.shape[0] == 0:
+                continue
 
-        return batch_yolo
+            index = np.zeros([box.shape[0], 1]) + n_index
+            n_index += 1
+
+            add_boxes = box[:, :]
+            add_boxes = np.append(index, box, axis=1)
+            if boxes.shape[0] == 0:
+                boxes = np.array(add_boxes)
+            else:
+                boxes = np.append(boxes, add_boxes, axis=0)
+
+        return boxes
         # return boundingboxes
 
 
@@ -327,11 +341,11 @@ if __name__ == "__main__":
         # draw boxes
         # tensor pratice
         print(box.shape)
-        for bb in range(box.shape[1]):
-            x = box[0][bb][1]
-            y = box[0][bb][2]
-            w = box[0][bb][3]
-            h = box[0][bb][4]
+        for bb in range(box.shape[0]):
+            x = box[bb][2]
+            y = box[bb][3]
+            w = box[bb][4]
+            h = box[bb][5]
 
             image = cv2.UMat(image).get()
             start = (x - w / 2, y - h / 2)
@@ -339,6 +353,7 @@ if __name__ == "__main__":
             color = (255, 0, 0)
             cv2.rectangle(image, start, end, color, 2)
 
+        print(box)
         t_end = time.clock()
         print(t_end - t_start)
         # for boxes in box[0]:
