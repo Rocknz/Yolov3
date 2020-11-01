@@ -138,11 +138,18 @@ class Yolo(nn.Module):
                 res_alpha_x = now_x[now_index[:] * (5 + self.C) + 1, box_iter]
                 res_alpha_y = now_x[now_index[:] * (5 + self.C) + 2, box_iter]
 
+                # w = now_x[now_index * (5 + self.C) + 3, box_iter]
+                # h = now_x[now_index * (5 + self.C) + 4, box_iter]
+
                 res_w = self.anchor[index, 0] * torch.exp(
-                    4 * now_x[now_index * (5 + self.C) + 3, box_iter] - 2
+                    4 * now_x[now_index * (5 + self.C) + 3, box_iter]
+                    - 2
+                    # w
                 )
                 res_h = self.anchor[index, 1] * torch.exp(
-                    4 * now_x[now_index * (5 + self.C) + 4, box_iter] - 2
+                    4 * now_x[now_index * (5 + self.C) + 4, box_iter]
+                    - 2
+                    # h
                 )
 
                 # rect = Variable(torch.zeros([box_size, 4])).cuda()
@@ -183,20 +190,23 @@ class Yolo(nn.Module):
                     .reshape([self.C * box_size])
                 )
                 label = now_x[label_range, box_size_range].reshape([box_size, self.C])
+                # label = torch.sigmoid(
+                #     now_x[label_range, box_size_range].reshape([box_size, self.C])
+                # )
 
                 iou = torch.ones([box_size]).cuda()
                 loss = loss + self.lambda_coord * self.bce(
                     now_x[now_index * (5 + self.C), box_iter], iou[:]
                 )
                 loss = loss + self.bce(label, hot_enco)
-                loss = loss + self.lambda_coord * self.bce(res_alpha_x, alpha_x)
-                loss = loss + self.lambda_coord * self.bce(res_alpha_y, alpha_y)
-                loss = loss + self.lambda_coord * self.mse(
-                    res_w / self.img_size, box[:, 4] / self.img_size
-                )
-                loss = loss + self.lambda_coord * self.mse(
-                    res_h / self.img_size, box[:, 5] / self.img_size
-                )
+                loss = loss + self.bce(res_alpha_x, alpha_x)
+                loss = loss + self.bce(res_alpha_y, alpha_y)
+                # this to size down.
+                loss = loss + self.mse(res_w / self.img_size, box[:, 4] / self.img_size)
+                loss = loss + self.mse(res_h / self.img_size, box[:, 5] / self.img_size)
+
+                # loss = loss + self.mse(w, torch.log(box[:, 4] / self.anchor[index, 0] + 1e-16))
+                # loss = loss + self.mse(h, torch.log(box[:, 5] / self.anchor[index, 1] + 1e-16))
 
                 del (
                     val,
@@ -210,6 +220,7 @@ class Yolo(nn.Module):
                     index,
                 )
 
+        # n_x = torch.sigmoid(x[check])
         n_x = x[check]
         val = Variable(torch.zeros(n_x.shape)).cuda()
         loss = loss + self.lambda_noobj * self.bce(n_x, val)
@@ -485,12 +496,12 @@ class YoloV3(nn.Module):
         # del x1, x2, x3, y1_1, y2_1, y2_2, y3_1, index, loss1, loss2, loss3
         return loss, y1, y2, y3
 
-    def save(self):
-        torch.save(self.state_dict(), self.path)
+    def save(self, name="yolo_model"):
+        torch.save(self.state_dict(), name)
 
-    def load(self):
+    def load(self, name="yolo_model"):
         try:
-            self.load_state_dict(torch.load(self.path))
+            self.load_state_dict(torch.load(name))
             return True
         except:
             print("load_error!")
@@ -533,12 +544,13 @@ def main():
         )
         print(annFile)
         data = DataLoad(dataDir, dataType, annFile, C, img_size=img_size)
-        data.load_val_start(data_num=2, batch_size=1, worker=1)
+        data.load_val_start(data_num=10, batch_size=1, worker=1)
 
         time.sleep(5)
         yolo = YoloV3(S, B, C, lambda_coord=5, lambda_noobj=0.5).cuda()
         raw_image, batch_boxes = data.load_val()
 
+        # lr = 0.001
         lr = 0.001
         optimizer = torch.optim.Adam(yolo.parameters(), lr=lr)
 
@@ -546,7 +558,7 @@ def main():
         image = torch.from_numpy(raw_image).float().cuda()
         boxes = torch.from_numpy(batch_boxes).float().cuda()
 
-        for i in range(1000):
+        for i in range(200):
             try:
                 optimizer.zero_grad()
                 (loss, y1, y2, y3) = yolo(image, boxes)
@@ -569,15 +581,17 @@ def main():
         from val_visualize import print_box
         import cv2
 
-        image = raw_image[0].transpose(2, 1, 0).astype("uint8")
-        image = cv2.UMat(image).get()
+        for i in range(1):
+            image = raw_image[i] * 255.0
+            image = image.transpose(2, 1, 0).astype("uint8")
+            image = cv2.UMat(image).get()
 
-        print_box(image, y1, img_size, 6)
-        print_box(image, y2, img_size, 3)
-        print_box(image, y3, img_size, 0)
+            print_box(image, y1, img_size, 6, batch_index=i)
+            print_box(image, y2, img_size, 3, batch_index=i)
+            print_box(image, y3, img_size, 0, batch_index=i)
 
-        cv2.imshow("img", image)
-        cv2.waitKey(0)
+            cv2.imshow("img", image)
+            cv2.waitKey(0)
 
 
 if __name__ == "__main__":

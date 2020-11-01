@@ -98,6 +98,7 @@ class DataLoad:
                     # cv2.waitKey(0)
 
                     image_np = np.asarray(image)
+                    image_np = image_np.astype(np.float32) / 255.0
 
                     boundingbox = []
                     for annos in anns:
@@ -202,6 +203,7 @@ class DataLoad:
                     # cv2.waitKey(0)
 
                     image_np = np.asarray(image)
+                    image_np = image_np.astype(np.float32) / 255.0
 
                     boundingbox = []
                     for annos in anns:

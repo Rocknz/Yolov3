@@ -5,6 +5,7 @@ import torch.nn.functional as F
 import sys
 from yolo_v3_new import YoloV3
 import os
+from os import path
 
 
 def validation():
@@ -37,6 +38,16 @@ def validation():
 
 def train(lr_init):
     global model, S, B, Category_num
+
+    min_val = 1e10
+    try:
+        if path.exists("min_val.txt"):
+            files = open("min_val.txt", "r")
+            min_val = float(files.read())
+            files.close()
+    except:
+        pass
+
     epochs = 1000
     data_num = 500
 
@@ -61,13 +72,14 @@ def train(lr_init):
             loss.backward()
 
             optimizer.step()
-            if i % 100 == 0:
+            if i % 50 == 0:
                 print("1st loss {}".format(loss.item()))
                 del loss
                 with torch.no_grad():
                     torch.cuda.set_device(0)
                     (loss, y1, y2, y3) = model(img, anno)
                 print("2nd loss {}".format(loss.item()))
+                model.save()
 
             i = i + 1
             if i > data_num:
@@ -79,12 +91,15 @@ def train(lr_init):
         print("epoch : {} end".format(epoch))
 
         loss_val = validation()
-        global min_loss
-        # if loss_val < min_loss:
-        #  min_loss = loss_val
+        if loss_val < min_val:
+            min_val = loss_val
+            files = open("min_val.txt", "w")
+            files.write(str(min_val))
+            model.save("yolo_min_model")
+            print("min val model saved!")
+            files.close()
+
         model.save()
-        #     print("data save!")
-        # validation
 
         del loss_val
 
@@ -96,7 +111,25 @@ def adjust_learning_rate(optimizer, epoch):
         param_group["lr"] = lr
 
 
+def snipp():
+    import torch
+
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = False
+    torch.backends.cudnn.allow_tf32 = True
+    # data = torch.randn([5, 32, 672, 672], dtype=torch.float, device="cuda", requires_grad=True)
+    # net = torch.nn.Conv2d(
+    #     32, 64, kernel_size=[3, 3], padding=[1, 1], stride=[2, 2], dilation=[1, 1], groups=1
+    # )
+    # net = net.cuda().float()
+    # out = net(data)
+    # out.backward(torch.randn_like(out))
+    torch.cuda.synchronize()
+
+
 def main():
+    # snipp()
     B = 2
     Category_num = 92
     img_size = 672
@@ -115,7 +148,7 @@ def main():
         dataDir_v, dataType_v
     )
 
-    val_data_num = 300
+    val_data_num = 100
     data_v = DataLoad(dataDir_v, dataType_v, annFile_v, Category_num, img_size=img_size)
     data_v.load_val_start(data_num=val_data_num, batch_size=1, worker=1)
     # torch.backends.cudnn.enabled = False
@@ -123,8 +156,8 @@ def main():
     global model
 
     os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
-    torch.backends.cudnn.benchmark = True
-    torch.backends.cudnn.enabled = True
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.enabled = False
 
     torch.cuda.set_device(0)
     torch.cuda.memory.empty_cache()
@@ -143,11 +176,11 @@ def main():
             if model.load():
                 print("model load end!!")
                 model.cuda()
-                min_loss = validation()
+                # min_loss = validation()
             else:
                 min_loss = 1e100
                 model.cuda()
-                min_loss = validation()
+                # min_loss = validation()
 
             import time
 
@@ -156,7 +189,7 @@ def main():
             # torch.backends.cudnn.enabled = False
 
             torch.cuda.set_device(0)
-            train(0.0005)
+            train(0.001)
 
     except Exception as e:
         print("Error occur!.", e)

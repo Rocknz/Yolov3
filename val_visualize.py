@@ -19,7 +19,7 @@ data_v.load_val_start(data_num=100, batch_size=1, worker=1)
 model = YoloV3(S, B, Category_num, lambda_coord=5, lambda_noobj=0.5)
 
 
-def print_box(image, box, img_size, start_index):
+def print_box(image, box, img_size, start_index, batch_index=0):
     box = torch.sigmoid(box)
     anchor = torch.Tensor(
         [
@@ -38,10 +38,10 @@ def print_box(image, box, img_size, start_index):
     box_len = img_size / box_size
     for i in range(box_size):
         for j in range(box_size):
-            nbox = box[0, :, i, j]
+            nbox = box[batch_index, :, i, j]
             for indx in range(3):
                 start = indx * (5 + Category_num)
-                if nbox[start] >= 0.9:
+                if nbox[start] >= 0.1:
                     alpha_x = nbox[start + 1] * box_len
                     alpha_y = nbox[start + 2] * box_len
                     w = anchor[start_index + indx, 0] * torch.exp(4 * nbox[start + 3] - 2)
@@ -49,8 +49,13 @@ def print_box(image, box, img_size, start_index):
                     x = alpha_x + i * box_len
                     y = alpha_y + j * box_len
 
-                    start = (x - w / 2, y - h / 2)
-                    end = (x + w / 2, y + h / 2)
+                    x = int(x.item())
+                    y = int(y.item())
+                    w = int(w.item())
+                    h = int(h.item())
+
+                    start = (int(x - w / 2), int(y - h / 2))
+                    end = (int(x + w / 2), int(y + h / 2))
                     color = (255, 0, 0)
                     cv2.rectangle(image, start, end, color, 2)
 
@@ -63,6 +68,7 @@ def visualize():
     loss, y1, y2, y3 = model(img_tensor, data)
 
     # draw image
+    img[0] = img[0] * 255.0
     image = img[0].transpose(2, 1, 0).astype("uint8")
     image = cv2.UMat(image).get()
 
@@ -75,14 +81,14 @@ def visualize():
 
 
 def main():
-    if model.load():
+    if model.load(name="yolo_min_model"):
         print("model load end!!")
         model.cuda()
     else:
         print("model load error!!")
         return
 
-    for i in range(10):
+    for i in range(100):
         visualize()
 
 
